@@ -33,7 +33,7 @@ if plotScope==1
     tiledlayout(2,2)
     nexttile(1)
     bar(0:VehicleAgeSpan,[CurrentFleetAge'/sum(CurrentFleetAge);CurrentFleetKMage'/sum(CurrentFleetKMage)]);
-    title('Share of Swedish trucks and traffic per age 2022')
+    title(strcat('Share of Swedish trucks and traffic per age ',num2str(currentYear)))
     legend("Trucks", "Traffic")
 
     nexttile(2)
@@ -41,7 +41,7 @@ if plotScope==1
     x3 = reordercats(x3, {'Trucks','km'});
     plotWeigthClassesFleet=[FleetWeightClassesNShares'; FleetWeightClassesTrafficShares']*100;
     bar(x3,plotWeigthClassesFleet, 'stacked');
-    title('Shares of trucks and km driven transport from Swedish trucks 2022')
+    title(strcat("Shares of trucks and km driven transport from Swedish trucks ",num2str(currentYear)))
     set(gca,'YLim',[0,100]);
     ytickformat('%.0f%%')
     legend(FleetWeightClasses(2:13,1))
@@ -56,22 +56,23 @@ if plotScope==1
     nexttile(4)
     plotTruckGroupsFleet=[FleetGroupsN'/sum(FleetGroupsN); FleetGroupsTraffic'/sum(FleetGroupsTraffic)]*100;
     bar(x3,plotTruckGroupsFleet, 'stacked');
-    title('Shares of trucks and km for trucks driven in Sweden 2022')
+    title(strcat("Shares of trucks and km for trucks driven in Sweden ",num2str(currentYear)))
     set(gca,'YLim',[0,100]);
     ytickformat('%.0f%%')
     legend(FleetTruckGroupDescription)
 end %plot if
 
-%% Compare historical data with forecast
+%% Compare fleet groups and transport groups
 if plotScope ==1
     figure("Name","Transport and truck comparision",'NumberTitle', 'off')
     tiledlayout(1,2)
     nexttile()
     fleetBar = bar(categorical({'km'}),FleetGroupsTraffic'/sum(FleetGroupsTraffic)*100, 'stacked', FaceColor='flat');
-    title({'Shares of traffic for', 'registred trucks driven in Sweden 2022'})
+    title({'Shares of traffic for', 'registred trucks driven in Sweden ',num2str(currentYear)})
     set(gca,'YLim',[0,100]);
     ytickformat('%.0f%%')
     legend(FleetTruckGroupDescription)
+    %set colors
     fleetBar(1).CData = [226 225 229]/255;
     fleetBar(2).CData = [88 186 193]/255;
     fleetBar(3).CData = [0 166 189]/255;
@@ -80,10 +81,11 @@ if plotScope ==1
 
     nexttile()
     transportBar = bar(categorical({'km'}),TransportTruckGroupsKM'./sum(TransportTruckGroupsKM)*100, 'stacked', FaceColor='flat');
-    title({'Shares of traffic from','truck transports in Sweden 2022'})
+    title({'Shares of traffic from','truck transports in Sweden ',num2str(currentYear)})
     set(gca,'YLim',[0,100]);
     ytickformat('%.0f%%')
     legend(TransportTruckGroupDescription)
+    %set colors
     transportBar(1).CData = [254 239 229]/255;
     transportBar(2).CData = [242 137 105]/255;
     transportBar(3).CData = [234 85 80]/255;
@@ -102,7 +104,7 @@ if plotScope==1
 
     survival=ones(VehicleAgeSpan+1,1); %Matrix for probability of survival
     for j=2:length(survival) %Creates column for probability of survival
-        survival(j)=survival(j-1)*(1-(a1*exp(-((x(j)-b1)/c1).^2)));
+        survival(j)=exp(-(j./lambda).^kappa);
     end
     plot(x, survival*100)
     legend("Scrapping probability", "Lifetime survival")
@@ -118,7 +120,7 @@ if plotScope==1
 
     nexttile(3)
     plot(FleetPeriod,BEVshareZEVs(StartYearFleet-1971+1:EndYearFleet-1971+1,1:4)*100)
-    title('BET share of new ZE trucks')
+    title('BET share of new ZEVs')
     legend(BEVdata{1,2:5})
     set(gca,'YLim',[0,100]);
     ytickformat('%.0f%%')
@@ -126,22 +128,23 @@ end %ifplot
 
 
 %% Transport demand forecast
-%Plot total transport demand scenarios
-figure("Name","Transport forecast", 'NumberTitle', 'off')
-tiledlayout(1,2)
-nexttile(1)
-plot(FleetPeriod,TransportDemand_Inputdata)
-title("Transport demand")
-ylabel("Gtkm")
-set(gca,'YLim',[0,100]);
-
-nexttile(2)
-plot(FleetPeriod,TrafficDemand_Inputdata)
-title("Traffic demand")
-ylabel("Mkm")
-set(gca,'YLim',[0,8000]);
-
 if plotScope ==1
+    %Plot total transport demand scenarios
+    figure("Name","Transport forecast", 'NumberTitle', 'off')
+    tiledlayout(1,2)
+    nexttile(1)
+    plot(FleetPeriod,TransportDemand_Inputdata)
+    title("Transport demand")
+    ylabel("Gtkm")
+    set(gca,'YLim',[0,100]);
+
+    nexttile(2)
+    plot(FleetPeriod,TrafficDemand_Inputdata)
+    title("Traffic demand")
+    ylabel("Mkm")
+    set(gca,'YLim',[0,8000]);
+
+
     %Compare with Samgods forcast
     % %Plot transport demand scenario, by fleet group
     figure("Name","Transport forecast", 'NumberTitle', 'off')
@@ -179,46 +182,58 @@ if plotScope ==1
     legend(SamgodsForecast(1,3:6))
 end
 
-%% Cmpare model with real data
-figure("Name","History vs forecast",'NumberTitle', 'off')
+%% Compare model with real data
+figureSM3 = figure("Name","History vs forecast",'NumberTitle', 'off');
 tiledlayout(3,1)
 nexttile(1)
 hold on
 plot(totalFleetHistory(:,1),totalFleetHistory(:,2)/1000)
 plot(FleetPeriod,totalFleetSize/1000)
 title("Total fleet")
-set(gca,'YLim',[0,130]);
+set(gca,'YLim',[0,max(totalFleetSize/1000)*1.1]);
 ylabel("thousand trucks")
 legend("Data","Model")
 
 nexttile(2)
 hold on
 plotNew= sum(newICE,[1,3])+sum(newZEV,[1,3]);
-plot(newHistory(:,1),newHistory(:,2))
-plot(FleetPeriod(2:end),plotNew(2:end))
+plot(newHistory(:,1),newHistory(:,2)/1000)
+plot(FleetPeriod(2:end),plotNew(2:end)/1000)
 title("New trucks")
-%set(gca,'YLim',[0,10000]);
-ylabel("trucks")
+set(gca,'YLim',[0,max(plotNew)*1.1/1000]);
+ylabel("thousand trucks")
 legend("Data","Model")
 
 nexttile(3)
 hold on
 plotScrapped= sum(scrappedICE,[1,3])+sum(scrappedZEV,[1,3]);
-plot(syntheticScrappedHistory(:,1),syntheticScrappedHistory(:,2))
-plot(FleetPeriod(2:end),plotScrapped(2:end))
+plot(syntheticScrappedHistory(:,1),syntheticScrappedHistory(:,2)/1000)
+plot(FleetPeriod(2:end),plotScrapped(2:end)/1000)
 title("Scrapped trucks")
-%set(gca,'YLim',[0,10000]);
-ylabel("trucks")
+set(gca,'YLim',[0,max(plotScrapped)*1.1/1000]);
+xlabel("Year")
+ylabel("thousand trucks")
 legend("Data","Model")
 
 
-figCompare=figure("Name","Model vs current fleet",'NumberTitle', 'off');
+figureSM4=figure("Name","Model vs current fleet",'NumberTitle', 'off');
 tiledlayout(2,1)
 nexttile(1)
 hold on
 bar(0:VehicleAgeSpan,[CurrentFleetAge'; (sum(stockICE(:,currentYear-StartYearFleet+1,:),3) +sum(stockZEV(currentYear-StartYearFleet+1),3))']);
-title('Number of trucks by age in 2022')
+title({'Number of trucks by age in ',num2str(currentYear)})
+ylabel('trucks')
 legend("Data", "Model")
+
+nexttile(2)
+title({'Traffic by truck age ',num2str(currentYear)})
+hold on
+bar(0:VehicleAgeSpan,...
+    [CurrentFleetKMage'; (sum(trafficICE_transport(:,currentYear-StartYearFleet+1,:),3) +sum(trafficBEV_transport(currentYear-StartYearFleet+1),3))']); %no FCET in 2022
+xlabel("Age")
+ylabel('km')
+legend("Data", "Model")
+
 
 %% Fleet forecast
 
@@ -345,10 +360,10 @@ title("Number of new FCET trucks")
 %set(gca,'YLim',[0,10000]);
 
 
-%% Traffic
+%% Traffic plots
 if plotScope ==1
-    figure("Name","Kontroll: traffic age for ICE",'NumberTitle', 'off')
-    title("KOntroll av trafikarbete för ICE")
+    figure("Name","Check: traffic age for ICE",'NumberTitle', 'off')
+    title("ICE Traffic check")
     hold on
     plot(FleetPeriod, sum(trafficICE_age,[1,3]))
     plot(FleetPeriod, sum(trafficICE_age2,[1,3]))
@@ -356,45 +371,61 @@ if plotScope ==1
     plot(FleetPeriod, sum(TrafficDemand,1)*10^6,'--')
     legend("age1","age2","age3","Total traffic demand")
 
-    figure("Name","Kontroll Transformation",'NumberTitle', 'off')
+    figure("Name","Check: Transformation from GVW to GCVW",'NumberTitle', 'off')
     hold on
     title("Compare traffic before and after transformation")
     plot(FleetPeriod,sum(trafficICE_transport,[1,3]) + sum(trafficBEV_transport,[1,3]) + sum(trafficFC_transport,[1,3]))
     plot(FleetPeriod,sum(trafficICE_age3,[1,3]) + sum(trafficBEV_age3,[1,3]) + sum(trafficFC_age3,[1,3]),'--')
     ylabel('km')
     legend("transport traffic","fleet traffic")
-    ylabel('km')
 
-    figure("Name","Kontroll trafikarbete per ålder",'NumberTitle', 'off')
+    figure("Name","Check traffic age",'NumberTitle', 'off')
     tiledlayout(2,1)
-    title("Annual milage per vehicle after scaling (ICE only)")
+    nexttile()
+    title("Annual milage per technology")
     hold on
-    plot(FleetPeriod,sum(trafficICE_transport,[1,3])/sum(stockICE,[1,3]))
-    plot(FleetPeriod,sum(trafficBEV_transport,[1,3])/sum(stockBEV,[1,3]))
-    plot(FleetPeriod,sum(trafficFC_transport,[1,3])/sum(stockFC,[1,3]))
+    plot(FleetPeriod,sum(trafficICE_transport,[1,3])./sum(stockICE,[1,3]))
+    plot(FleetPeriod,sum(trafficBEV_transport,[1,3])./sum(stockBEV,[1,3]))
+    plot(FleetPeriod,sum(trafficFC_transport,[1,3])./sum(stockFC,[1,3]))
     ylabel('km')
-    legend("Non-freigth","fleet traffic")
-    ylabel('km')
+    legend("ICE","BET","FCET")
+    set(gca,'YLim',[0,max(sum(trafficFC_transport,[1,3])./sum(stockFC,[1,3])*1.1)]);
+
+    nexttile()
+    title("Annual milage per truck group")
+    hold on
+    plot(FleetPeriod,sum(trafficICE_age3(:,:,1),1)./sum(stockICE(:,:,1),1))
+    plot(FleetPeriod,sum(trafficICE_age3(:,:,2),1)./sum(stockICE(:,:,2),1))
+    plot(FleetPeriod,sum(trafficICE_age3(:,:,3),1)./sum(stockICE(:,:,3),1))
+    plot(FleetPeriod,sum(trafficICE_age3(:,:,4),1)./sum(stockICE(:,:,4),1))
+    legend(FleetTruckGroupDescription(1:4))
+    set(gca,'YLim',[0,max(sum(trafficICE_age3(:,:,4),1)./sum(stockICE(:,:,4),1)*1.1)]);
 end
 
-%if plot by age figure is open, add km from model
-if exist("figCompare","var")==1
-    figure(figCompare)
-    nexttile(2)
-    title('Traffic by truck age 2022')
-    hold on
-    bar(0:VehicleAgeSpan,...
-        [CurrentFleetKMage'; (sum(trafficICE_transport(:,currentYear-StartYearFleet+1,:),3) +sum(trafficBEV_transport(currentYear-StartYearFleet+1),3))']); %no FCET in 2022
-    ylabel('km')
-    legend("Data", "Model")
-end %if figure is open, add traffic
-
-figure("Name","Trafikarbete per teknik (input till utsläppsberäkningar)",'NumberTitle', 'off')
+%% total traffic
+figure("Name","Traffic per technology (variables used as input to emission calculations)",'NumberTitle', 'off')
 hold on
-title("Transport group traffic per technology")
-plot(FleetPeriod,sum(trafficICE_transport,[1,3]))
-plot(FleetPeriod,sum(trafficBEV_transport,[1,3]))
-plot(FleetPeriod,sum(trafficFC_transport,[1,3]))
-plot(FleetPeriod,sum(trafficICE_transport,[1,3]) + sum(trafficBEV_transport,[1,3]) + sum(trafficFC_transport,[1,3]))
-legend('ICE','BEV','FC', 'Total')
+title("Traffic per technology")
+plot(FleetPeriod,sum(trafficICE_transport,[1,3]),Color="#4e4f4c")
+plot(FleetPeriod,sum(trafficBEV_transport,[1,3]),Color="#f18968")
+plot(FleetPeriod,sum(trafficFC_transport,[1,3]),Color="#00a5bc")
+plot(FleetPeriod,sum(trafficICE_transport,[1,3]) + sum(trafficBEV_transport,[1,3]) + sum(trafficFC_transport,[1,3]),"black",LineStyle="--")
+legend('ICE','BET','FCET', 'Total')
 ylabel('km')
+
+%% Annual mileage by age
+
+i = currentYear-StartYearFleet;
+mileageTruckWeightGroup = trafficICE_age3(:,i,:)./stockICE(:,i,:);
+
+figureSM2 =figure("Name","Annual mileage in in 2022 as a function of age",'NumberTitle', 'off');
+hold on
+title("Annual mileage by age")
+plot(0:VehicleAgeSpan,AnnualMileage_Age)
+for i =1:size(mileageTruckWeightGroup,3)-1
+    plot(0:VehicleAgeSpan,mileageTruckWeightGroup(:,1,i))
+end
+xlabel("Truck age")
+ylabel('km/vehicle and year')
+lgd = legend (["All trucks";FleetTruckGroupDescription(1:4)]);
+

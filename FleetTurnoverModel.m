@@ -2,9 +2,9 @@ function [Stock_ICE_2, scrappedICE, newICE, Stock_ZEV_2, scrappedZEV, newZEV] = 
     FleetTurnoverModel(ForecastMethod, Stock_ICE_1, Stock_ZEV_1, scrappingProbabilities, mileage, totalFleetSize2, ZEVRates2, TrafficDemand2)
 
 %initialize variables
-VehicleAges=size(Stock_ICE_1,1); %31
+VehicleAges=size(Stock_ICE_1,1); %age 0-30, ie length=31
 nFleetGroups = size(Stock_ICE_1,2);%4
-groupShares = (sum(Stock_ICE_1,1) + sum(Stock_ZEV_1,1))/(sum(Stock_ICE_1,"all") + sum(Stock_ZEV_1,"all")); %1x4, beräknas från föregående år
+groupShares = (sum(Stock_ICE_1,1) + sum(Stock_ZEV_1,1))/(sum(Stock_ICE_1,"all") + sum(Stock_ZEV_1,"all")); %1x4, average share in stock in previous year
 Stock_ICE_2 = zeros(VehicleAges,nFleetGroups);
 Stock_ZEV_2 = zeros(VehicleAges,nFleetGroups);
 fkmSupply_ICE = zeros(VehicleAges,nFleetGroups);
@@ -20,12 +20,8 @@ for i=2:VehicleAges-1
     Stock_ZEV_2(i,:)= Stock_ZEV_1(i-1,:);
 end %aging
 
-% 30 år gamla fordon fortsätter vara 30 år gamla
-%Stock_ICE_2(VehicleAges,:)= Stock_ICE_1(VehicleAges,:) + Stock_ICE_1(VehicleAges-1,:);
-%Stock_ZEV_2(VehicleAges,:)= Stock_ZEV_1(VehicleAges,:) + Stock_ZEV_1(VehicleAges-1,:);
 
-
-% 30 år gamla fordon försvinner
+% Scrapping of vehicles age 30
 Stock_ICE_2(VehicleAges,:)= Stock_ICE_1(VehicleAges-1,:);
 Stock_ZEV_2(VehicleAges,:)= Stock_ZEV_1(VehicleAges-1,:);
 
@@ -39,7 +35,6 @@ for i = 1:nFleetGroups
 end
 
 %calculate new vehicles
-
 if ForecastMethod==1
     newTotal = totalFleetSize2 - (sum(Stock_ICE_2,"all") + sum(Stock_ZEV_2,"all") - sum(scrappedICE,"all") -sum(scrappedZEV,"all"));
 end %method 1
@@ -49,7 +44,7 @@ if ForecastMethod==2
     newTotal = (TrafficDemand2 - fkmSupplyTot)/mileage(1);
 end %method 2
 
-% ignore negative newTotal (resultat of decrease in trafficdemand)
+% ignore negative newTotal (resultat of historic decrease in traffic demand)
 if newTotal<0
     newTotal=0;
 end

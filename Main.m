@@ -1,34 +1,29 @@
 clc;
 clear;
 close all;
-TODO list
-% 1. säkerställ att fleetmodule fungerar korrekt, antalet ZEV trucks för de
-% lätta viktklasserna minskar i slutet på prognosen
-
-% Nu heter scenariot Biofuels, gör om till LowCarbonfuel eller liknande för
-% att öppna för olika typer av fossilfria bränslen.
-
-% Gör om Mileage input data så att tidsserien inkluderas + Gör om formatet
-%ladda tidsserien även för freigth demand?
 
 %% Part 0: Set scope and variables
 
 plotScope = 0; % 1 if all graphs are to be plotted and 0 if only selected result graphs
-currentYear=2022; %year for plotting data etc. Available: 2001-2023
+writeResults = 0; %1 is results should be saved to .mat files, tables and figures
+
+currentYear=2023; %year for plotting data etc. Available: 2001-2023
 VehicleAgeSpan=30;% number of model years to include in model.
 
-StartYearFleet = 2001; %>=2001 (data tillgängligt från 2001)
+StartYearFleet = 2001; %>=2001 (data available from 2001)
 EndYearFleet = 2060;
 ForecastMethod = 2; % 1= Constant fleet growth rate derived from data, 2= new vehicles supplied by delta in transport demand
 
-StartYearEmissions = 2020;
+StartYearEmissions = 2020; %must be more than 2019, no data for vehicle cycle pre-2019
 EndYearEmissions =2060;
 
 techScenario ="Main"; % Main = BEV&FC, noZEV= only ICE, noFC = only BEVs as ZEVs
-fuelScenario = "Main"; %Main = 100% renewable in 2050, Stated = Swedish staed policy, SwedishClimate = 100% renewable in 2045
-trafficScenario = "Main"; % Main = TrV basprognos, Low = lower scenario 
-lowTransportDemandGrowthRate = 0.8; %how much slower transport demand grows compared to main
+fuelScenario = "Main"; %Main = 100% renewable in 2050, Stated = Swedish stated policy, SwedishClimate = 100% renewable in 2045
+trafficScenario = "Main"; % Main = Transport Administration base case, Low = lower traffic demand scenario
 
+%Weilbull Survival function parameters
+lambda=12.9077; %scale parameter
+kappa =3.3215;  %shape parameter
 
 %% Part 1a: Transport and traffic initialisation
 
@@ -44,16 +39,18 @@ TransportWeightClassesFreightShares(:,1) = cell2mat(TransportWeightClasses(2:9,9
 nTransportWeightClasses = length(TransportWeightClassesKMShares);
 
 %add groups for non-freight trucks and foriegn trucks
-TransportTruckGroupsTKM = [0; %swedish non-freight trucks
+TransportTruckGroupsTKM = [...
+    0; %swedish non-freight trucks
     sum(TransportWeightClassesTKM(1:3)/1000); %3.5-29.9t
     sum(TransportWeightClassesTKM(4:6)/1000); %30-59.9t;
     sum(TransportWeightClassesTKM(7:8)/1000); %>=60t
-    readvars('TransportDemand.xlsx','Sheet','Matlab','Range','J12:J12')]; %foreign trucks
-TransportTruckGroupsKM = [readvars('TransportDemand.xlsx','Sheet','Matlab','Range','G12:G12'); %swedish non-freight trucks
+    readvars('TransportDemand.xlsx','Sheet','Matlab','Range','G24:G24')]; %foreign trucks
+TransportTruckGroupsKM = [...
+    readvars('TransportDemand.xlsx','Sheet','Matlab','Range','F24:F24'); %swedish non-freight trucks
     sum(TransportWeightClassesKM(1:3)/1000); %3.5-29.9t
     sum(TransportWeightClassesKM(4:6)/1000); %30-59.9t;
     sum(TransportWeightClassesKM(7:8)/1000); %>=60t
-    readvars('TransportDemand.xlsx','Sheet','Matlab','Range','H12:H12')]; %foreign trucks
+    readvars('TransportDemand.xlsx','Sheet','Matlab','Range','E24:E24')]; %foreign trucks
 nGroupsTransport = length(TransportTruckGroupsTKM);
 TransportTruckGroupDescription = {'Swedish non-freight trucks';'3.5-29.9t'; '30-59.9t';'>=60t';'Foreign trucks'};
 
@@ -109,10 +106,10 @@ nFleetPowertrains = length(FleetPowertrainsNShares);
 FleetPeriod=StartYearFleet:EndYearFleet;
 
 %Set fleet annual growth rate (method 1 only)
-%FleetGrowthRate = 1.0057; %(average between 2001-2023):
-%FleetGrowthRate = 1.0088; %(average between 2014-2023):
-%FleetGrowthRate = 1.0128; %(ökningstakt trafikarbete enligt basprognos 2024):
-FleetGrowthRate = 1.0085; %(historisk korrelation TA-ökning och fordonsökning kombinerat med ökning av TA enligt baspronos):
+%FleetGrowthRate = 1.0057; %(average between 2001-2023);
+%FleetGrowthRate = 1.0088; %(average between 2014-2023);
+%FleetGrowthRate = 1.0128; %(annual increase in Transport Administration base case 2024);
+FleetGrowthRate = 1.0085; %(Correlation between vehicle growth and traffic growth based on data (2001-2023) and annual traffic increase from Transport Administration base case 2024);
 
 % Read electrification rates + set share of BEVs of ZEVs
 electrificationData=readcell('ElectrificationFleetTruckGroup.xlsx','Sheet','ZEV_shares','Range','A1:F96');  %1971-2065
@@ -124,28 +121,35 @@ if techScenario =="noZEV"
     ZEVRates = zeros(size(ZEVRates));
 end
 
-%Cleaned Gauss from ScrappingCurveFitting
-%General model Gauss1:
-%gaussClean(x) =  a1*exp(-((x-b1)/c1)^2)
-%Coefficients (with 95% confidence bounds):
-a1 =      0.2341;  %(0.2206, 0.2475)
-b1 =       17.77;  %(17.34, 18.21)
-c1 =       9.252;  %(8.607, 9.897)
+%Weibull survival function
+%S = exp(-(x./lambda).^gamma);
+% scrapping p(t+1) = S(t+1)/S(t)
 x = 0:VehicleAgeSpan;
-scrappingProbabilities = a1*exp(-((x-b1)/c1).^2);
-
+scrappingProbabilities=zeros(size(x));
+for i=1:VehicleAgeSpan
+    scrappingProbabilities(i) = 1-(exp(-(x(i+1)./lambda).^kappa))/(exp(-(x(i)./lambda).^kappa));
+end
+scrappingProbabilities(end)=1;
 
 %% Part 2a: Transport demand forecasting
 
 %Import forecast data from excel
 ImportRowsTransport= strcat('B',num2str(StartYearFleet-2000+2),':B',num2str(2+EndYearFleet-2000));
 ImportRowsTraffic= strcat('C',num2str(StartYearFleet-2000+2),':C',num2str(2+EndYearFleet-2000));
-ImportRowsForeignTraffic = strcat('H',num2str(StartYearFleet-2000+2),':H',num2str(2+EndYearFleet-2000));
+ImportRowsDomesticTraffic = strcat('D',num2str(StartYearFleet-2000+2),':D',num2str(2+EndYearFleet-2000));
+%ImportRowsDomesticNonFreightTraffic = strcat('H',num2str(StartYearFleet-2000+2),':H',num2str(2+EndYearFleet-2000));
+ImportRowsForeignTraffic = strcat('E',num2str(StartYearFleet-2000+2),':E',num2str(2+EndYearFleet-2000));
 
 TransportDemand_Inputdata=readvars('TransportDemand.xlsx','Sheet','Matlab','Range',ImportRowsTransport);%Imports annual transport demand
 TrafficDemand_Inputdata=readvars('TransportDemand.xlsx','Sheet','Matlab','Range',ImportRowsTraffic);%Imports annual travel demand
 foreignTraffic = readvars('TransportDemand.xlsx','Sheet','Matlab','Range',ImportRowsForeignTraffic);
-domesticTrafficDemand = TrafficDemand_Inputdata-foreignTraffic;
+domesticTrafficDemand = readvars('TransportDemand.xlsx','Sheet','Matlab','Range',ImportRowsDomesticTraffic);
+
+if trafficScenario=="Low"
+    TrafficDemand_Inputdata=readvars('TransportDemand.xlsx','Sheet','Matlab-low','Range',ImportRowsTraffic);%Imports annual travel demand
+    foreignTraffic = readvars('TransportDemand.xlsx','Sheet','Matlab-low','Range',ImportRowsForeignTraffic);
+    domesticTrafficDemand = readvars('TransportDemand.xlsx','Sheet','Matlab-low','Range',ImportRowsDomesticTraffic);
+end
 
 SamgodsForecast = readcell('TransportDemand.xlsx','Sheet','Basprognos','Range','A1:M28');
 samgodsTraffic =cell2mat(SamgodsForecast(2:28,3:6))/10^3; %Mfkm
@@ -155,25 +159,18 @@ samgodsTransport = cell2mat(SamgodsForecast(2:28,9:12))/10^6; %Gtkm
 TransportDemand=zeros(nGroupsTransport,length(FleetPeriod));
 TrafficDemand=zeros(nGroupsTransport,length(FleetPeriod));
 for j = 1:nGroupsTransport
-    for i=1:length(FleetPeriod) %Loop for creating a column for travel demand with the length of the set time horizon
-        TransportDemand(j,i)=TransportDemand_Inputdata(i,1)*TransportTruckGroupsTKM(j)/sum(TransportTruckGroupsTKM);
-        TrafficDemand(j,i)=TrafficDemand_Inputdata(i,1)*TransportTruckGroupsKM(j)/sum(TransportTruckGroupsKM);(j);
-
-        if (trafficScenario=="Low" && (i+StartYearFleet-currentYear)>0)
-            TransportDemand(j,i)=TransportDemand(j,i-1)*((FleetGrowthRate-1)*lowTransportDemandGrowthRate+1)*TransportTruckGroupsTKM(j)/sum(TransportTruckGroupsTKM);
-            TrafficDemand(j,i)=TrafficDemand(j,i-1)*((FleetGrowthRate-1)*lowTransportDemandGrowthRate+1)*TransportTruckGroupsKM(j)/sum(TransportTruckGroupsKM);(j);
-        end %endif
+    for t=1:length(FleetPeriod) %Loop for creating a column for travel demand with the length of the set time horizon
+        TransportDemand(j,t)=TransportDemand_Inputdata(t,1)*TransportTruckGroupsTKM(j)/sum(TransportTruckGroupsTKM);
+        TrafficDemand(j,t)=TrafficDemand_Inputdata(t,1)*TransportTruckGroupsKM(j)/sum(TransportTruckGroupsKM);(j);
     end
 end
 
 
+%% MODULE NOT CURRENTLY USED. Part 2c Transport electric demand forecasting
 
-%% NOT CURRENTLY USED. Part 2c Transport electric demand forecasting
-
-%ev. electrification rates för efterfrågan på ZEV transporter
+% electrification rates for ZEV demand
 
 %% Part 2c: Domestic fleet supply forecasting
-
 % initialise stocks, scrapped, and newreg
 
 %Powertrain:ICE
@@ -199,36 +196,36 @@ newBEV = zeros(size(stockICE));
 newFC = zeros(size(stockICE));
 
 %run fleet turnover model
-for i = 2:length(FleetPeriod)
+for t = 2:length(FleetPeriod)
 
     if ForecastMethod==1
-        totalFleetSize(i)= totalFleetSize(i-1)*FleetGrowthRate;
+        totalFleetSize(t)= totalFleetSize(t-1)*FleetGrowthRate;
     end
 
-    tempStockICE = squeeze(stockICE(:,i-1,:));
-    tempStockZEV = squeeze(stockZEV(:,i-1,:));
+    tempStockICE = squeeze(stockICE(:,t-1,:));
+    tempStockZEV = squeeze(stockZEV(:,t-1,:));
 
     % calculate fleet turnover for domestic trucks
-    [stockICE(:,i,:), scrappedICE(:,i,:), newICE(:,i,:), stockZEV(:,i,:), scrappedZEV(:,i,:), newZEV(:,i,:)] = ...
-        FleetTurnoverModel(ForecastMethod,tempStockICE, tempStockZEV, scrappingProbabilities, AnnualMileage_Age, totalFleetSize(i), ZEVRates(i+(StartYearFleet-1971),:),domesticTrafficDemand(i)*10^6);
+    [stockICE(:,t,:), scrappedICE(:,t,:), newICE(:,t,:), stockZEV(:,t,:), scrappedZEV(:,t,:), newZEV(:,t,:)] = ...
+        FleetTurnoverModel(ForecastMethod,tempStockICE, tempStockZEV, scrappingProbabilities, AnnualMileage_Age, totalFleetSize(t), ZEVRates(t+(StartYearFleet-1971),:),domesticTrafficDemand(t)*10^6);
 
     if ForecastMethod==2
-        totalFleetSize(i) = sum(stockICE(:,i,:),"all") + sum(stockZEV(:,i,:),"all");
+        totalFleetSize(t) = sum(stockICE(:,t,:),"all") + sum(stockZEV(:,t,:),"all");
     end
 
     %allocate ZEV into BEV and FC
     if techScenario == "noFC"
         BEVshareZEVs(:,:) = 1;
     end
-    newBEV(1,i,:) = squeeze(newZEV(1,i,:))'.*BEVshareZEVs(i+(StartYearFleet-1971),:);
-    newFC(1,i,:) = newZEV(1,i,:) - newBEV(1,i,:);
+    newBEV(1,t,:) = squeeze(newZEV(1,t,:))'.*BEVshareZEVs(t+(StartYearFleet-1971),:);
+    newFC(1,t,:) = newZEV(1,t,:) - newBEV(1,t,:);
 
     %divide ZEV stock into BEV and FC
     for j=1:nGroupsFleet
-        stockBEV(:,i,j) = stockZEV(:,i,j).*flip(BEVshareZEVs(i+(StartYearFleet-1971)-VehicleAgeSpan:i+(StartYearFleet-1971),j));
-        stockFC(:,i,j) = stockZEV(:,i,j) - stockBEV(:,i,j);
-        scrappedBEV(:,i,j) = scrappedZEV(:,i,j).*flip(BEVshareZEVs(i+(StartYearFleet-1971)-VehicleAgeSpan:i+(StartYearFleet-1971),j)); 
-        scrappedFC(:,i,j) = scrappedZEV(:,i,j) - scrappedBEV(:,i,j);
+        stockBEV(:,t,j) = stockZEV(:,t,j).*flip(BEVshareZEVs(t+(StartYearFleet-1971)-VehicleAgeSpan:t+(StartYearFleet-1971),j));
+        stockFC(:,t,j) = stockZEV(:,t,j) - stockBEV(:,t,j);
+        scrappedBEV(:,t,j) = scrappedZEV(:,t,j).*flip(BEVshareZEVs(t+(StartYearFleet-1971)-VehicleAgeSpan:t+(StartYearFleet-1971),j));
+        scrappedFC(:,t,j) = scrappedZEV(:,t,j) - scrappedBEV(:,t,j);
     end %j
 end %loop fleet
 
@@ -238,7 +235,7 @@ nBEV = sum(stockBEV,[1,3]);
 nFC = sum(stockFC,[1,3]);
 
 
-%% Part 2c: Load historical data 
+%% Part 2c: Load historical data
 
 FleetHistory=readcell('HistoricData.xlsx','Sheet','Matlab','Range','A1:F24');
 totalFleetHistory= cell2mat(FleetHistory(2:24,1:2));
@@ -246,8 +243,6 @@ newHistory(:,1)= cell2mat(FleetHistory(2:24,1));
 newHistory(:,2)= cell2mat(FleetHistory(2:24,3));
 syntheticScrappedHistory(:,1) = cell2mat(FleetHistory(2:24,1));
 syntheticScrappedHistory(:,2) = cell2mat(FleetHistory(2:24,6));
-
-%Plots are moved to PlotFleet.m
 
 %% Part 2d: Supply transport demand by fleet traffic supply
 
@@ -281,69 +276,76 @@ trafficShareICE_group = zeros(length(FleetPeriod), nGroupsFleet);
 trafficShareBEV_group = zeros(size(trafficShareICE_group));
 trafficShareFC_group = zeros(size(trafficShareICE_group));
 
-%calculating traffic for trucks in fleet
-for j=1:length(FleetPeriod)
-    for i =1:nGroupsFleet-1
-
-        %calclate annual traffic per fleet group
-        trafficICE_fleet(j,i) = sum(stockICE(:,j,i))*AnnualMileage_Size(i);
-        trafficBEV_fleet(j,i) = sum(stockBEV(:,j,i))*AnnualMileage_Size(i);
-        trafficFC_fleet(j,i) = sum(stockFC(:,j,i))*AnnualMileage_Size(i);
+%calculating traffic for Swedish trucks in fleet
+for t=1:length(FleetPeriod)
+    for j =1:nGroupsFleet-1
 
         %calclate annual traffic per age
-        trafficICE_age(:,j,i) = stockICE(:,j,i).*AnnualMileage_Age;
-        trafficBEV_age(:,j,i)= stockBEV(:,j,i).*AnnualMileage_Age;
-        trafficFC_age(:,j,i)= stockFC(:,j,i).*AnnualMileage_Age;
-    end %
+        trafficICE_age(:,t,j) = stockICE(:,t,j).*AnnualMileage_Age;
+        trafficBEV_age(:,t,j)= stockBEV(:,t,j).*AnnualMileage_Age;
+        trafficFC_age(:,t,j)= stockFC(:,t,j).*AnnualMileage_Age;
 
-    for i =1:nGroupsFleet-1
-        %scale total traffic to fleet groups, not by Mileage by age
-        trafficICE_age2(:,j,i) = trafficICE_fleet(j,i)*trafficICE_age(:,j,i)/sum(trafficICE_age(:,j,i));
-        if sum(trafficBEV_age(:,j,i))>0
-            trafficBEV_age2(:,j,i)= trafficBEV_fleet(j,i)*trafficBEV_age(:,j,i)/sum(trafficBEV_age(:,j,i));
-        end
-        if sum(trafficFC_age(:,j,i))>0
-            trafficFC_age2(:,j,i)= trafficFC_fleet(j,i)*trafficFC_age(:,j,i)/sum(trafficFC_age(:,j,i));
-        end
-    end %group i
+        %calclate traffic per fleet group (no age differentiated mileage)
+        trafficICE_fleet(t,j) = sum(stockICE(:,t,j))*AnnualMileage_Size(j);
+        trafficBEV_fleet(t,j) = sum(stockBEV(:,t,j))*AnnualMileage_Size(j);
+        trafficFC_fleet(t,j) = sum(stockFC(:,t,j))*AnnualMileage_Size(j);
 
-    for i =1:nGroupsFleet-1
-    %calculate traffic share per technology and group
-    trafficShareICE_group(j,i) = sum(trafficICE_age2(:,j,i))/...
-        (sum(trafficICE_age2(:,j,:),"all") + sum(trafficBEV_age2(:,j,:),"all") + sum(trafficFC_age2(:,j,:),"all"));
-    trafficShareBEV_group(j,i) = sum(trafficBEV_age2(:,j,i))/(sum(trafficICE_age2(:,j,:),"all") + sum(trafficBEV_age2(:,j,:),"all") + sum(trafficFC_age2(:,j,:),"all"));
-    trafficShareFC_group(j,i) = sum(trafficFC_age2(:,j,i))/(sum(trafficICE_age2(:,j,:),"all") + sum(trafficBEV_age2(:,j,:),"all") + sum(trafficFC_age2(:,j,:),"all"));
+    end % group j
 
-       % scale to meet total domestic supply
-        trafficICE_age3(:,j,i) = domesticTrafficDemand(j)*10^6*trafficShareICE_group(j,i)*trafficICE_age2(:,j,i)/sum(trafficICE_age2(:,j,i));
+    %adjust traffic by age for different size groups
+    for j =1:nGroupsFleet-1
+        trafficICE_age2(:,t,j)= trafficICE_fleet(t,j)*trafficICE_age(:,t,j)/sum(trafficICE_age(:,t,j));
+        if sum(trafficBEV_age(:,t,j))>0
+            trafficBEV_age2(:,t,j)= trafficBEV_fleet(t,j)*trafficBEV_age(:,t,j)/sum(trafficBEV_age(:,t,j));
+        end
+        if sum(trafficFC_age(:,t,j))>0
+            trafficFC_age2(:,t,j)= trafficFC_fleet(t,j)*trafficFC_age(:,t,j)/sum(trafficFC_age(:,t,j));
+        end
 
-        if sum(trafficBEV_age2(:,j,i))>0
-            trafficBEV_age3(:,j,i) = domesticTrafficDemand(j)*10^6*trafficShareBEV_group(j,i)*trafficBEV_age2(:,j,i)/sum(trafficBEV_age2(:,j,i));
+        %adjust to meet total supply (this is needed because number of
+        %trucks is calculated from the Annual mileage by age, but we now
+        %wants to use an everage mileage by size
+    end
+    for j =1:nGroupsFleet-1
+        %calculate traffic share per technology and group
+        trafficShareICE_group(t,j) = sum(trafficICE_age2(:,t,j))/...
+            (sum(trafficICE_age2(:,t,:),"all") + sum(trafficBEV_age2(:,t,:),"all") + sum(trafficFC_age2(:,t,:),"all"));
+        trafficShareBEV_group(t,j) = sum(trafficBEV_age2(:,t,j))/(sum(trafficICE_age2(:,t,:),"all") + sum(trafficBEV_age2(:,t,:),"all") + sum(trafficFC_age2(:,t,:),"all"));
+        trafficShareFC_group(t,j) = sum(trafficFC_age2(:,t,j))/(sum(trafficICE_age2(:,t,:),"all") + sum(trafficBEV_age2(:,t,:),"all") + sum(trafficFC_age2(:,t,:),"all"));
+
+        % scale to meet total domestic supply
+        trafficICE_age3(:,t,j) = domesticTrafficDemand(t)*10^6*trafficShareICE_group(t,j)*trafficICE_age2(:,t,j)/sum(trafficICE_age2(:,t,j));
+
+        if sum(trafficBEV_age2(:,t,j))>0
+            trafficBEV_age3(:,t,j) = domesticTrafficDemand(t)*10^6*trafficShareBEV_group(t,j)*trafficBEV_age2(:,t,j)/sum(trafficBEV_age2(:,t,j));
         end
-        if sum(trafficFC_age2(:,j,i))>0
-            trafficFC_age3(:,j,i) = domesticTrafficDemand(j)*10^6*trafficShareFC_group(j,i)*trafficFC_age2(:,j,i)/sum(trafficFC_age2(:,j,i));
+        if sum(trafficFC_age2(:,t,j))>0
+            trafficFC_age3(:,t,j) = domesticTrafficDemand(t)*10^6*trafficShareFC_group(t,j)*trafficFC_age2(:,t,j)/sum(trafficFC_age2(:,t,j));
         end
-    end %for each group except last (foreign trucks)
+    end %for each group j except last (foreign trucks)
 
 
     %add foreign traffic (assume same age distribution as 30-60t)
-    trafficICE_age3(:,j,end) =foreignTraffic(j)*sum(trafficShareICE_group(j,:))*...
-        trafficICE_age3(:,j,4)/sum(trafficICE_age3(:,j,4))*10^6;
-    trafficBEV_age3(:,j,end) =foreignTraffic(j)*sum(trafficShareBEV_group(j,:))*...
-        trafficICE_age3(:,j,4)/sum(trafficICE_age3(:,j,4))*10^6;
-    trafficFC_age3(:,j,end) =foreignTraffic(j)*sum(trafficShareFC_group(j,:))*...
-        trafficICE_age3(:,j,4)/sum(trafficICE_age3(:,j,4))*10^6;
-end %period i
+    trafficICE_age3(:,t,end) =foreignTraffic(t)*sum(trafficShareICE_group(t,:))*...
+        trafficICE_age3(:,t,4)/sum(trafficICE_age3(:,t,4))*10^6;
+    trafficBEV_age3(:,t,end) =foreignTraffic(t)*sum(trafficShareBEV_group(t,:))*...
+        trafficICE_age3(:,t,4)/sum(trafficICE_age3(:,t,4))*10^6;
+    trafficFC_age3(:,t,end) =foreignTraffic(t)*sum(trafficShareFC_group(t,:))*...
+        trafficICE_age3(:,t,4)/sum(trafficICE_age3(:,t,4))*10^6;
+end %period t
 
 
 %move traffic from fleet groups to transport groups
-for j=1:length(FleetPeriod)
-    trafficICE_transport(:,j,:) = squeeze(trafficICE_age3(:,j,:))*transformationTable';
-    trafficBEV_transport(:,j,:) = squeeze(trafficBEV_age3(:,j,:))*transformationTable';
-    trafficFC_transport(:,j,:) = squeeze(trafficFC_age3(:,j,:))*transformationTable';  
+for t=1:length(FleetPeriod)
+    trafficICE_transport(:,t,:) = squeeze(trafficICE_age3(:,t,:))*transformationTable';
+    trafficBEV_transport(:,t,:) = squeeze(trafficBEV_age3(:,t,:))*transformationTable';
+    trafficFC_transport(:,t,:) = squeeze(trafficFC_age3(:,t,:))*transformationTable';
 end
+
+
 %% Part 2e: Plot fleet and traffic
 run("PlotFleet.m")
+
 
 %% PART 3: Calculate emissions
 %SP = Stated policy, SD = Sustainable development background systems
@@ -351,28 +353,42 @@ EmissionPeriod = StartYearEmissions:EndYearEmissions;
 
 %Vehicle cycle = ton CO2e/vehicle
 %load Production data
-VehicleCycle_Inputdata_CtG_SP=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Stated",'Range',strcat('B',num2str(StartYearEmissions-2000+4),':M',num2str(EndYearEmissions-2000+4))); %2019-2060
-VehicleCycle_Inputdata_CtG_SD=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Sustainable",'Range',strcat('B',num2str(StartYearEmissions-2000+4),':M',num2str(EndYearEmissions-2000+4))); %2019-2060
+VehicleCycle_Inputdata_CtG_SP=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Stated",'Range',...
+    strcat('B',num2str(StartYearEmissions-2000+4),':M',num2str(EndYearEmissions-2000+4))); %2019-2060
+VehicleCycle_Inputdata_CtG_SD=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Sustainable",'Range',...
+    strcat('B',num2str(StartYearEmissions-2000+4),':M',num2str(EndYearEmissions-2000+4))); %2019-2060
 
 %load Maintenance data
-VehicleCycle_Inputdata_GtEOL_SP=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Stated",'Range',strcat('P',num2str(StartYearEmissions-2000+4),':AA',num2str(EndYearEmissions-2000+4))); %2019-2060
-VehicleCycle_Inputdata_GtEOL_SD=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Sustainable",'Range',strcat('P',num2str(StartYearEmissions-2000+4),':AA',num2str(EndYearEmissions-2000+4))); %2019-2060
+VehicleCycle_Inputdata_GtEOL_SP=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Stated",'Range',...
+    strcat('P',num2str(StartYearEmissions-2000+4),':AA',num2str(EndYearEmissions-2000+4))); %2019-2060
+VehicleCycle_Inputdata_GtEOL_SD=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Sustainable",'Range',...
+    strcat('P',num2str(StartYearEmissions-2000+4),':AA',num2str(EndYearEmissions-2000+4))); %2019-2060
 
 %load EOL data
-VehicleCycle_Inputdata_EOL_SP=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Stated",'Range',strcat('AD',num2str(StartYearEmissions-2000+4),':AO',num2str(EndYearEmissions-2000+4))); %2019-2060
-VehicleCycle_Inputdata_EOL_SD=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Sustainable",'Range',strcat('AD',num2str(StartYearEmissions-2000+4),':AO',num2str(EndYearEmissions-2000+4))); %2019-2060
+VehicleCycle_Inputdata_EOL_SP=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Stated",'Range',...
+    strcat('AD',num2str(StartYearEmissions-2000+4),':AO',num2str(EndYearEmissions-2000+4))); %2019-2060
+VehicleCycle_Inputdata_EOL_SD=readmatrix('VehicleCycle.xlsx','Sheet',"Matlab_Sustainable",'Range',...
+    strcat('AD',num2str(StartYearEmissions-2000+4),':AO',num2str(EndYearEmissions-2000+4))); %2019-2060
 
 %energy consumption = kWh/km
-%load tailpipe data
-Tailpipe_inputdata_Energy=readmatrix('Tailpipe.xlsx','Sheet','Matlab_FuelConsumption','Range','C5:AF120'); %Imports energy consumption data for ICE and Electric divided in weight classes and loaded/emtpy running. See excel file for more info
+Tailpipe_inputdata_Energy=readmatrix('Tailpipe.xlsx','Sheet','Matlab_EnergyUse','Range','C5:Q120'); %1950-2065, imports all years as historical years needed
+%Tailpipe_inputdata_Energy=readmatrix('Tailpipe.xlsx','Sheet','Matlab_FuelConsumption','Range','C5:AF120'); %1950-2065, imports all years as historical years needed
 Tailpipe_inputdata_CO2e=readvars('Tailpipe.xlsx','Sheet','Matlab_LCA','Range','B3:B6');
 
 % load fuel data
-Fuel_shares=readvars('BiofuelScenario.xlsx','Sheet','Matlab','Range','B3:B68');% Column vector for shares of biofuels
-
+if fuelScenario == "Main"
+    Fuel_shares=readvars('FuelScenario.xlsx','Sheet','Matlab','Range',strcat('B',num2str(StartYearEmissions-2000+3),':B',num2str(EndYearEmissions-2000+3)));% %2000-2065
+elseif fuelScenario == "Stated"
+    Fuel_shares=readvars('FuelScenario.xlsx','Sheet','Matlab','Range',strcat('C',num2str(StartYearEmissions-2000+3),':C',num2str(EndYearEmissions-2000+3)));% %2000-2065
+elseif fuelScenario == "SwedishClimate"
+    Fuel_shares=readvars('FuelScenario.xlsx','Sheet','Matlab','Range',strcat('D',num2str(StartYearEmissions-2000+3),':D',num2str(EndYearEmissions-2000+3)));% %2000-2065
+end
 %load WTT data
-WellToTank_Inputdata_LCA_SP=readmatrix('WellToTank.xlsx','Sheet','Matlab_Stated','Range', strcat('B',num2str(StartYearEmissions-2000+4),':E',num2str(EndYearEmissions-2000+4)));% LCA data for diesel, biofuels and electricity (column order)
-WellToTank_Inputdata_LCA_SD=readmatrix('WellToTank.xlsx','Sheet','Matlab_Sustainable','Range', strcat('B',num2str(StartYearEmissions-2000+4),':E',num2str(EndYearEmissions-2000+4)));% LCA data for diesel, biofuels and electricity (column order)
+WellToTank_Inputdata_LCA_SP=readmatrix('WellToTank.xlsx','Sheet','Matlab_Stated','Range',...
+    strcat('B',num2str(StartYearEmissions-2000+4),':E',num2str(EndYearEmissions-2000+4)));% LCA data for diesel, biofuels and electricity (column order)
+WellToTank_Inputdata_LCA_SD=readmatrix('WellToTank.xlsx','Sheet','Matlab_Sustainable','Range',...
+    strcat('B',num2str(StartYearEmissions-2000+4),':E',num2str(EndYearEmissions-2000+4)));% LCA data for diesel, biofuels and electricity (column order)
+
 
 %% Part 3a Production, maintenance and EOL
 
@@ -384,37 +400,17 @@ GHG_production_ICE_SD = zeros(size(GHG_production_ICE_SP));
 GHG_production_BEV_SD = zeros(size(GHG_production_ICE_SP));
 GHG_production_FC_SD = zeros(size(GHG_production_ICE_SP));
 
-for i=EmissionPeriod
-    GHG_production_ICE_SP(1,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,1)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,1);
-    GHG_production_ICE_SP(2,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,2)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,2);
-    GHG_production_ICE_SP(3,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,3)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,3);
-    GHG_production_ICE_SP(4,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,4)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,4);
+for i=1:length(EmissionPeriod)
+    for j=1:nGroupsFleet-1
+        GHG_production_ICE_SP(j,i)=newICE(1,StartYearEmissions-StartYearFleet+i,j)*VehicleCycle_Inputdata_CtG_SP(i,j);
+        GHG_production_BEV_SP(j,i)=newBEV(1,StartYearEmissions-StartYearFleet+i,j)*VehicleCycle_Inputdata_CtG_SP(i,j+4);
+        GHG_production_FC_SP(j,i)=newFC(1,StartYearEmissions-StartYearFleet+i,j)*VehicleCycle_Inputdata_CtG_SP(i,j+8);
 
-    GHG_production_BEV_SP(1,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,1)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,5);
-    GHG_production_BEV_SP(2,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,2)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,6);
-    GHG_production_BEV_SP(3,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,3)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,7);
-    GHG_production_BEV_SP(4,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,4)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,8);
-
-    GHG_production_FC_SP(1,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,1)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,9);
-    GHG_production_FC_SP(2,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,2)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,10);
-    GHG_production_FC_SP(3,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,3)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,11);
-    GHG_production_FC_SP(4,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,4)*VehicleCycle_Inputdata_CtG_SP(i-StartYearEmissions+1,12);
-
-    GHG_production_ICE_SD(1,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,1)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,1);
-    GHG_production_ICE_SD(2,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,2)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,2);
-    GHG_production_ICE_SD(3,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,3)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,3);
-    GHG_production_ICE_SD(4,i-StartYearEmissions+1)=newICE(1,i-StartYearFleet+1,4)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,4);
-
-    GHG_production_BEV_SD(1,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,1)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,5);
-    GHG_production_BEV_SD(2,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,2)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,6);
-    GHG_production_BEV_SD(3,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,3)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,7);
-    GHG_production_BEV_SD(4,i-StartYearEmissions+1)=newBEV(1,i-StartYearFleet+1,4)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,8);
-
-    GHG_production_FC_SD(1,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,1)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,9);
-    GHG_production_FC_SD(2,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,2)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,10);
-    GHG_production_FC_SD(3,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,3)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,11);
-    GHG_production_FC_SD(4,i-StartYearEmissions+1)=newFC(1,i-StartYearFleet+1,4)*VehicleCycle_Inputdata_CtG_SD(i-StartYearEmissions+1,12);
-end%i
+        GHG_production_ICE_SD(j,i)=newICE(1,StartYearEmissions-StartYearFleet+i,j)*VehicleCycle_Inputdata_CtG_SD(i,j);
+        GHG_production_BEV_SD(j,i)=newBEV(1,StartYearEmissions-StartYearFleet+i,j)*VehicleCycle_Inputdata_CtG_SD(i,j+4);
+        GHG_production_FC_SD(j,i)=newFC(1,StartYearEmissions-StartYearFleet+i,j)*VehicleCycle_Inputdata_CtG_SD(i,j+8);
+    end %j in nFleetgroups
+end %i in Emissionpeiod
 
 %Maintenance %däckbyte år 6, år 12, år 18 samt år 24
 GHG_maintenance_ICE_SP = zeros(nGroupsFleet,length(EmissionPeriod));
@@ -424,61 +420,23 @@ GHG_maintenance_ICE_SD = zeros(size(GHG_maintenance_ICE_SP));
 GHG_maintenance_BEV_SD = zeros(size(GHG_maintenance_ICE_SP));
 GHG_maintenance_FC_SD = zeros(size(GHG_maintenance_ICE_SP));
 
-for i=EmissionPeriod
-    GHG_maintenance_ICE_SP(1,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,1) + stockICE(12,i-StartYearFleet+1,1) + stockICE(18,i-StartYearFleet+1,1) + stockICE(24,i-StartYearFleet+1,1))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,1);
-    GHG_maintenance_ICE_SP(2,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,2) + stockICE(12,i-StartYearFleet+1,2) + stockICE(18,i-StartYearFleet+1,2) + stockICE(24,i-StartYearFleet+1,2))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,2);
-    GHG_maintenance_ICE_SP(3,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,3) + stockICE(12,i-StartYearFleet+1,3) + stockICE(18,i-StartYearFleet+1,3) + stockICE(24,i-StartYearFleet+1,3))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,3);
-    GHG_maintenance_ICE_SP(4,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,4) + stockICE(12,i-StartYearFleet+1,4) + stockICE(18,i-StartYearFleet+1,4) + stockICE(24,i-StartYearFleet+1,4))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,4);
+for i=1:length(EmissionPeriod)
+    for j=1:nGroupsFleet-1
+        GHG_maintenance_ICE_SP(j,i)=(stockICE(6,StartYearEmissions-StartYearFleet+i,j) + stockICE(12,StartYearEmissions-StartYearFleet+i,j) +...
+            stockICE(18,StartYearEmissions-StartYearFleet+i,j) + stockICE(24,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_GtEOL_SP(i,j);
+        GHG_maintenance_BEV_SP(j,i)=(stockBEV(6,StartYearEmissions-StartYearFleet+i,j) + stockBEV(12,StartYearEmissions-StartYearFleet+i,j) +...
+            stockBEV(18,StartYearEmissions-StartYearFleet+i,j) + stockBEV(24,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_GtEOL_SP(i,j+1);
+        GHG_maintenance_FC_SP(j,i)=(stockFC(6,StartYearEmissions-StartYearFleet+i,j) + stockFC(12,StartYearEmissions-StartYearFleet+i,j) +...
+            stockFC(18,StartYearEmissions-StartYearFleet+i,j) + stockFC(24,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_GtEOL_SP(i,j+4);
 
-    GHG_maintenance_BEV_SP(1,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,1) + stockBEV(12,i-StartYearFleet+1,1) + stockBEV(18,i-StartYearFleet+1,1) + stockBEV(24,i-StartYearFleet+1,1))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,5);
-    GHG_maintenance_BEV_SP(2,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,2) + stockBEV(12,i-StartYearFleet+1,2) + stockBEV(18,i-StartYearFleet+1,2) + stockBEV(24,i-StartYearFleet+1,2))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,6);
-    GHG_maintenance_BEV_SP(3,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,3) + stockBEV(12,i-StartYearFleet+1,3) + stockBEV(18,i-StartYearFleet+1,3) + stockBEV(24,i-StartYearFleet+1,3))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,7);
-    GHG_maintenance_BEV_SP(4,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,4) + stockBEV(12,i-StartYearFleet+1,4) + stockBEV(18,i-StartYearFleet+1,4) + stockBEV(24,i-StartYearFleet+1,4))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,8);
-
-    GHG_maintenance_FC_SP(1,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,1) + stockFC(12,i-StartYearFleet+1,1) + stockFC(18,i-StartYearFleet+1,1) + stockFC(24,i-StartYearFleet+1,1))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,5);
-    GHG_maintenance_FC_SP(2,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,2) + stockFC(12,i-StartYearFleet+1,2) + stockFC(18,i-StartYearFleet+1,2) + stockFC(24,i-StartYearFleet+1,2))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,6);
-    GHG_maintenance_FC_SP(3,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,3) + stockFC(12,i-StartYearFleet+1,3) + stockFC(18,i-StartYearFleet+1,3) + stockFC(24,i-StartYearFleet+1,3))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,7);
-    GHG_maintenance_FC_SP(4,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,4) + stockFC(12,i-StartYearFleet+1,4) + stockFC(18,i-StartYearFleet+1,4) + stockFC(24,i-StartYearFleet+1,4))*...
-        VehicleCycle_Inputdata_GtEOL_SP(i-StartYearEmissions+1,8);
-
-    GHG_maintenance_ICE_SD(1,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,1) + stockICE(12,i-StartYearFleet+1,1) + stockICE(18,i-StartYearFleet+1,1) + stockICE(24,i-StartYearFleet+1,1))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,1);
-    GHG_maintenance_ICE_SD(2,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,2) + stockICE(12,i-StartYearFleet+1,2) + stockICE(18,i-StartYearFleet+1,2) + stockICE(24,i-StartYearFleet+1,2))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,2);
-    GHG_maintenance_ICE_SD(3,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,3) + stockICE(12,i-StartYearFleet+1,3) + stockICE(18,i-StartYearFleet+1,3) + stockICE(24,i-StartYearFleet+1,3))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,3);
-    GHG_maintenance_ICE_SD(4,i-StartYearEmissions+1)=(stockICE(6,i-StartYearFleet+1,4) + stockICE(12,i-StartYearFleet+1,4) + stockICE(18,i-StartYearFleet+1,4) + stockICE(24,i-StartYearFleet+1,4))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,4);
-
-    GHG_maintenance_BEV_SD(1,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,1) + stockBEV(12,i-StartYearFleet+1,1) + stockBEV(18,i-StartYearFleet+1,1) + stockBEV(24,i-StartYearFleet+1,1))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,5);
-    GHG_maintenance_BEV_SD(2,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,2) + stockBEV(12,i-StartYearFleet+1,2) + stockBEV(18,i-StartYearFleet+1,2) + stockBEV(24,i-StartYearFleet+1,2))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,6);
-    GHG_maintenance_BEV_SD(3,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,3) + stockBEV(12,i-StartYearFleet+1,3) + stockBEV(18,i-StartYearFleet+1,3) + stockBEV(24,i-StartYearFleet+1,3))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,7);
-    GHG_maintenance_BEV_SD(4,i-StartYearEmissions+1)=(stockBEV(6,i-StartYearFleet+1,4) + stockBEV(12,i-StartYearFleet+1,4) + stockBEV(18,i-StartYearFleet+1,4) + stockBEV(24,i-StartYearFleet+1,4))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,8);
-
-    GHG_maintenance_FC_SD(1,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,1) + stockFC(12,i-StartYearFleet+1,1) + stockFC(18,i-StartYearFleet+1,1) + stockFC(24,i-StartYearFleet+1,1))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,5);
-    GHG_maintenance_FC_SD(2,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,2) + stockFC(12,i-StartYearFleet+1,2) + stockFC(18,i-StartYearFleet+1,2) + stockFC(24,i-StartYearFleet+1,2))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,6);
-    GHG_maintenance_FC_SD(3,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,3) + stockFC(12,i-StartYearFleet+1,3) + stockFC(18,i-StartYearFleet+1,3) + stockFC(24,i-StartYearFleet+1,3))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,7);
-    GHG_maintenance_FC_SD(4,i-StartYearEmissions+1)=(stockFC(6,i-StartYearFleet+1,4) + stockFC(12,i-StartYearFleet+1,4) + stockFC(18,i-StartYearFleet+1,4) + stockFC(24,i-StartYearFleet+1,4))*...
-        VehicleCycle_Inputdata_GtEOL_SD(i-StartYearEmissions+1,8);
-end%i
+        GHG_maintenance_ICE_SD(j,i)=(stockICE(6,StartYearEmissions-StartYearFleet+i,j) + stockICE(12,StartYearEmissions-StartYearFleet+i,j) +...
+            stockICE(18,StartYearEmissions-StartYearFleet+i,j) + stockICE(24,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_GtEOL_SD(i,j);
+        GHG_maintenance_BEV_SD(j,i)=(stockBEV(6,StartYearEmissions-StartYearFleet+i,j) + stockBEV(12,StartYearEmissions-StartYearFleet+i,j) +...
+            stockBEV(18,StartYearEmissions-StartYearFleet+i,j) + stockBEV(24,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_GtEOL_SD(i,j+1);
+        GHG_maintenance_FC_SD(j,i)=(stockFC(6,StartYearEmissions-StartYearFleet+i,j) + stockFC(12,StartYearEmissions-StartYearFleet+i,j) +...
+            stockFC(18,StartYearEmissions-StartYearFleet+i,j) + stockFC(24,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_GtEOL_SD(i,j+4);
+    end %j in nFleetGroups
+end %i in Emission period
 
 % EOL
 GHG_EOL_ICE_SP = zeros(nGroupsFleet,length(EmissionPeriod));
@@ -488,45 +446,25 @@ GHG_EOL_ICE_SD = zeros(size(GHG_maintenance_ICE_SP));
 GHG_EOL_BEV_SD = zeros(size(GHG_maintenance_ICE_SP));
 GHG_EOL_FC_SD = zeros(size(GHG_maintenance_ICE_SP));
 
-for i=EmissionPeriod
-    GHG_EOL_ICE_SP(1,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,1))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,1);
-    GHG_EOL_ICE_SP(2,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,2))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,2);
-    GHG_EOL_ICE_SP(3,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,3))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,3);
-    GHG_EOL_ICE_SP(4,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,4))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,4);
+for i= 1:length(EmissionPeriod)
+    for j=1:nGroupsFleet-1
+        GHG_EOL_ICE_SP(j,i)=sum(scrappedICE(:,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_EOL_SP(i,j);
+        GHG_EOL_BEV_SP(j,i)=sum(scrappedBEV(:,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_EOL_SP(i,j+1);
+        GHG_EOL_FC_SP(j,i)=sum(scrappedFC(:,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_EOL_SP(i,j+4);
 
-    GHG_EOL_BEV_SP(1,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,1))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,5);
-    GHG_EOL_BEV_SP(2,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,2))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,6);
-    GHG_EOL_BEV_SP(3,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,3))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,7);
-    GHG_EOL_BEV_SP(4,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,4))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,8);
+        GHG_EOL_ICE_SD(j,i)=sum(scrappedICE(:,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_EOL_SD(i,j);
+        GHG_EOL_BEV_SD(j,i)=sum(scrappedBEV(:,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_EOL_SD(i,j+1);
+        GHG_EOL_FC_SD(j,i)=sum(scrappedFC(:,StartYearEmissions-StartYearFleet+i,j))*VehicleCycle_Inputdata_EOL_SD(i,j+4);
 
-    GHG_EOL_FC_SP(1,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,1))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,9);
-    GHG_EOL_FC_SP(2,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,2))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,10);
-    GHG_EOL_FC_SP(3,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,3))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,11);
-    GHG_EOL_FC_SP(4,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,4))*VehicleCycle_Inputdata_EOL_SP(i-StartYearEmissions+1,12);
+    end % j in nGroupsFleet
+end % i in emission period
 
-    GHG_EOL_ICE_SD(1,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,1))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,1);
-    GHG_EOL_ICE_SD(2,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,2))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,2);
-    GHG_EOL_ICE_SD(3,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,3))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,3);
-    GHG_EOL_ICE_SD(4,i-StartYearEmissions+1)=sum(scrappedICE(:,i-StartYearFleet+1,4))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,4);
-
-    GHG_EOL_BEV_SD(1,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,1))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,5);
-    GHG_EOL_BEV_SD(2,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,2))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,6);
-    GHG_EOL_BEV_SD(3,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,3))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,7);
-    GHG_EOL_BEV_SD(4,i-StartYearEmissions+1)=sum(scrappedBEV(:,i-StartYearFleet+1,4))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,8);
-
-    GHG_EOL_FC_SD(1,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,1))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,9);
-    GHG_EOL_FC_SD(2,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,2))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,10);
-    GHG_EOL_FC_SD(3,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,3))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,11);
-    GHG_EOL_FC_SD(4,i-StartYearEmissions+1)=sum(scrappedFC(:,i-StartYearFleet+1,4))*VehicleCycle_Inputdata_EOL_SD(i-StartYearEmissions+1,12);
-end %i
 
 %% Part 3b Use phase - TTW
 
 %%% ENERGY consumption
 % Annual fuel consumption in kWh .
 EnergyConsumptionTotal=zeros(3,length(EmissionPeriod)); % ROW 1:ICE, 2:Electric, 3:Hydrogen. Column: Year
-Empty=0.2; %Set share for distance with no load
-Loaded=1-Empty;
 
 % ICE
 EnergyConsumption_ICE=zeros(VehicleAgeSpan,length(EmissionPeriod),nGroupsTransport); %Annual energy use
@@ -534,25 +472,13 @@ for year = EmissionPeriod
     for age=1:VehicleAgeSpan+1
         efficiencyYear=year-age-1948; %Index for manufacture year
 
-        %empty driving
-        a=trafficICE_transport(age,year-StartYearFleet+1,1)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,1); %Fuel consumption for each vehicle age, weight class and lorries running empty
-        b=trafficICE_transport(age,year-StartYearFleet+1,2)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,3);
-        c=trafficICE_transport(age,year-StartYearFleet+1,3)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,5);
-        d=trafficICE_transport(age,year-StartYearFleet+1,4)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,7);
-        e=trafficICE_transport(age,year-StartYearFleet+1,5)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,9);
+        %calculate for each transport group
+        EnergyConsumption_ICE(age,year-StartYearEmissions+1,1)=trafficICE_transport(age,year-StartYearFleet+1,1)*Tailpipe_inputdata_Energy(efficiencyYear,1); %Fuel consumption for each vehicle age, weight class and lorries running empty
+        EnergyConsumption_ICE(age,year-StartYearEmissions+1,2)=trafficICE_transport(age,year-StartYearFleet+1,2)*Tailpipe_inputdata_Energy(efficiencyYear,2);
+        EnergyConsumption_ICE(age,year-StartYearEmissions+1,3)=trafficICE_transport(age,year-StartYearFleet+1,3)*Tailpipe_inputdata_Energy(efficiencyYear,3);
+        EnergyConsumption_ICE(age,year-StartYearEmissions+1,4)=trafficICE_transport(age,year-StartYearFleet+1,4)*Tailpipe_inputdata_Energy(efficiencyYear,4);
+        EnergyConsumption_ICE(age,year-StartYearEmissions+1,5)=trafficICE_transport(age,year-StartYearFleet+1,5)*Tailpipe_inputdata_Energy(efficiencyYear,5);
 
-        %loaded driving
-        aa=trafficICE_transport(age,year-StartYearFleet+1,1)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,2); %Fuel consumption for each vehicle age, weight class and lorries running empty
-        bb=trafficICE_transport(age,year-StartYearFleet+1,2)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,4);
-        cc=trafficICE_transport(age,year-StartYearFleet+1,3)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,6);
-        dd=trafficICE_transport(age,year-StartYearFleet+1,4)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,8);
-        ee=trafficICE_transport(age,year-StartYearFleet+1,5)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,10);
-
-        EnergyConsumption_ICE(age,year-StartYearEmissions+1,1)=a+aa; % Saves the total fuel consumption for each vehicle group
-        EnergyConsumption_ICE(age,year-StartYearEmissions+1,2)=b+bb;
-        EnergyConsumption_ICE(age,year-StartYearEmissions+1,3)=c+cc;
-        EnergyConsumption_ICE(age,year-StartYearEmissions+1,4)=d+dd;
-        EnergyConsumption_ICE(age,year-StartYearEmissions+1,5)=e+ee;
     end %age
     EnergyConsumptionTotal(1,year-StartYearEmissions+1)=sum(EnergyConsumption_ICE(:,year-StartYearEmissions+1,:),"all"); % Sums up and saves total yearly fuel consumption for ICE
 end %i
@@ -563,25 +489,13 @@ for year = EmissionPeriod
     for age=1:VehicleAgeSpan+1
         efficiencyYear=year-age-1948; %Index for manufacture year
 
-        %empty driving
-        a=trafficBEV_transport(age,year-StartYearFleet+1,1)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,11); %Fuel consumption for each vehicle age, weight class and lorries running empty
-        b=trafficBEV_transport(age,year-StartYearFleet+1,2)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,13);
-        c=trafficBEV_transport(age,year-StartYearFleet+1,3)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,15);
-        d=trafficBEV_transport(age,year-StartYearFleet+1,4)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,17);
-        e=trafficBEV_transport(age,year-StartYearFleet+1,5)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,19);
+        %calculate for each transport group
+        EnergyConsumption_BEV(age,year-StartYearEmissions+1,1)=trafficBEV_transport(age,year-StartYearFleet+1,1)*Tailpipe_inputdata_Energy(efficiencyYear,6); %Fuel consumption for each vehicle age, weight class and lorries running empty
+        EnergyConsumption_BEV(age,year-StartYearEmissions+1,2)=trafficBEV_transport(age,year-StartYearFleet+1,2)*Tailpipe_inputdata_Energy(efficiencyYear,7);
+        EnergyConsumption_BEV(age,year-StartYearEmissions+1,3)=trafficBEV_transport(age,year-StartYearFleet+1,3)*Tailpipe_inputdata_Energy(efficiencyYear,8);
+        EnergyConsumption_BEV(age,year-StartYearEmissions+1,4)=trafficBEV_transport(age,year-StartYearFleet+1,4)*Tailpipe_inputdata_Energy(efficiencyYear,9);
+        EnergyConsumption_BEV(age,year-StartYearEmissions+1,5)=trafficBEV_transport(age,year-StartYearFleet+1,5)*Tailpipe_inputdata_Energy(efficiencyYear,10);
 
-        %loaded driving
-        aa=trafficBEV_transport(age,year-StartYearFleet+1,1)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,12); %Fuel consumption for each vehicle age, weight class and lorries running empty
-        bb=trafficBEV_transport(age,year-StartYearFleet+1,2)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,14);
-        cc=trafficBEV_transport(age,year-StartYearFleet+1,3)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,16);
-        dd=trafficBEV_transport(age,year-StartYearFleet+1,4)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,18);
-        ee=trafficBEV_transport(age,year-StartYearFleet+1,5)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,20);
-
-        EnergyConsumption_BEV(age,year-StartYearEmissions+1,1) = a+aa; % Saves the total fuel consumption for each vehicle group
-        EnergyConsumption_BEV(age,year-StartYearEmissions+1,2) = b+bb;
-        EnergyConsumption_BEV(age,year-StartYearEmissions+1,3) = c+cc;
-        EnergyConsumption_BEV(age,year-StartYearEmissions+1,4) = d+dd;
-        EnergyConsumption_BEV(age,year-StartYearEmissions+1,5) = e+ee;
     end %age
     EnergyConsumptionTotal(2,year-StartYearEmissions+1)=sum(EnergyConsumption_BEV(:,year-StartYearEmissions+1,:),"all"); % Sums up and saves total yearly fuel consumption for BEVs
 end %i
@@ -591,25 +505,14 @@ EnergyConsumption_FC=zeros(size(EnergyConsumption_ICE)); %Annual energy use
 for year = EmissionPeriod
     for age=1:VehicleAgeSpan+1
         efficiencyYear=year-age-1948; %Index for manufacture year
-        %empty driving
-        a=trafficFC_transport(age,year-StartYearFleet+1,1)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,21); %Fuel consumption for each vehicle age, weight class and lorries running empty
-        b=trafficFC_transport(age,year-StartYearFleet+1,2)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,23);
-        c=trafficFC_transport(age,year-StartYearFleet+1,3)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,25);
-        d=trafficFC_transport(age,year-StartYearFleet+1,4)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,27);
-        e=trafficFC_transport(age,year-StartYearFleet+1,5)*Empty*Tailpipe_inputdata_Energy(efficiencyYear,29);
 
-        %loaded driving
-        aa=trafficFC_transport(age,year-StartYearFleet+1,1)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,22); %Fuel consumption for each vehicle age, weight class and lorries running empty
-        bb=trafficFC_transport(age,year-StartYearFleet+1,2)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,24);
-        cc=trafficFC_transport(age,year-StartYearFleet+1,3)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,26);
-        dd=trafficFC_transport(age,year-StartYearFleet+1,4)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,28);
-        ee=trafficFC_transport(age,year-StartYearFleet+1,5)*Loaded*Tailpipe_inputdata_Energy(efficiencyYear,30);
+        %calculate for each transport group
+        EnergyConsumption_FC(age,year-StartYearEmissions+1,1)=trafficFC_transport(age,year-StartYearFleet+1,1)*Tailpipe_inputdata_Energy(efficiencyYear,11); %Fuel consumption for each vehicle age, weight class and lorries running empty
+        EnergyConsumption_FC(age,year-StartYearEmissions+1,2)=trafficFC_transport(age,year-StartYearFleet+1,2)*Tailpipe_inputdata_Energy(efficiencyYear,12);
+        EnergyConsumption_FC(age,year-StartYearEmissions+1,3)=trafficFC_transport(age,year-StartYearFleet+1,3)*Tailpipe_inputdata_Energy(efficiencyYear,13);
+        EnergyConsumption_FC(age,year-StartYearEmissions+1,4)=trafficFC_transport(age,year-StartYearFleet+1,4)*Tailpipe_inputdata_Energy(efficiencyYear,14);
+        EnergyConsumption_FC(age,year-StartYearEmissions+1,5)=trafficFC_transport(age,year-StartYearFleet+1,5)*Tailpipe_inputdata_Energy(efficiencyYear,15);
 
-        EnergyConsumption_FC(age,year-StartYearEmissions+1,1)=a+aa; % Saves the total fuel consumption for each vehicle group
-        EnergyConsumption_FC(age,year-StartYearEmissions+1,2)=b+bb;
-        EnergyConsumption_FC(age,year-StartYearEmissions+1,3)=c+cc;
-        EnergyConsumption_FC(age,year-StartYearEmissions+1,4)=d+dd;
-        EnergyConsumption_FC(age,year-StartYearEmissions+1,5)=e+ee;
     end
 
     EnergyConsumptionTotal(3,year-StartYearEmissions+1)=sum(EnergyConsumption_FC(:,year-StartYearEmissions+1,:),"all"); % Sums up and saves total yearly fuel consumption for fuel cell
@@ -622,12 +525,12 @@ Biofuel_FC=zeros(1,length(EmissionPeriod)); % To save biofuel consumption for pl
 FossilFuel_FC=zeros(1,length(EmissionPeriod));% To save fossil fuel consumption for plots in other m-files
 
 for i=1:length(EmissionPeriod)
-    Biofuel_FC(1,i)=EnergyConsumptionTotal(1,i)*Fuel_shares(StartYearEmissions-2000+i);
-    FossilFuel_FC(1,i)=EnergyConsumptionTotal(1,i)*(1-Fuel_shares(StartYearEmissions-2000+i));
+    Biofuel_FC(1,i)=EnergyConsumptionTotal(1,i)*Fuel_shares(i);
+    FossilFuel_FC(1,i)=EnergyConsumptionTotal(1,i)*(1-Fuel_shares(i));
 end
 
 % GHG emissions in ton
-Tailpipe_GHG=zeros(1,length(EmissionPeriod)); % Matrix for tailpipe GHG emission from diesel usage
+Tailpipe_GHG=zeros(1,length(EmissionPeriod)); % Matrix for tailpipe GHG emission from diesel usage (and non-CO2 from biofuels)
 for i=1:length(EmissionPeriod)
     Tailpipe_GHG(1,i)=FossilFuel_FC(1,i)*Tailpipe_inputdata_CO2e(1)/10^6 + Biofuel_FC(1,i)*Tailpipe_inputdata_CO2e(2)/10^6;
 end
@@ -636,23 +539,29 @@ end
 %% Part 3c Use phase - WTT
 
 %in tonnes
-WellToTank_GHG_SP=zeros(4,length(EmissionPeriod)); %Matrix for GHG emission from well to tank. Row 1: Diesel, ROW 2: Biofuels, ROW 3: Electricity, ROW 4: Hydrogen
-WellToTank_GHG_SD=zeros(4,length(EmissionPeriod)); %Matrix for GHG emission from well to tank. Row 1: Diesel, ROW 2: Biofuels, ROW 3: Electricity, ROW 4: Hydrogen
+WellToTank_GHG_SP=zeros(4,length(EmissionPeriod)); %Matrix for GHG emission from well to tank. Row 1: Diesel, 2: Biofuels, 3: Electricity, 4: Hydrogen
+WellToTank_GHG_SD=zeros(4,length(EmissionPeriod)); %Matrix for GHG emission from well to tank. Row 1: Diesel, 2: Biofuels, 3: Electricity, 4: Hydrogen
 
 for i=1:length(EmissionPeriod)
-    WellToTank_GHG_SP(1,i)=FossilFuel_FC(1,i)*WellToTank_Inputdata_LCA_SP(i,1)/10^6;
-    WellToTank_GHG_SP(2,i)=Biofuel_FC(1,i)*WellToTank_Inputdata_LCA_SP(i,2)/10^6;
+    WellToTank_GHG_SP(1,i)=FossilFuel_FC(1,i)*WellToTank_Inputdata_LCA_SP(i,1)/10^6; %diesel
+    WellToTank_GHG_SP(2,i)=Biofuel_FC(1,i)*WellToTank_Inputdata_LCA_SP(i,2)/10^6; %biofuels
     WellToTank_GHG_SP(3,i)=EnergyConsumptionTotal(2,i)*WellToTank_Inputdata_LCA_SP(i,3)/10^6; %electricity
     WellToTank_GHG_SP(4,i)=EnergyConsumptionTotal(3,i)*WellToTank_Inputdata_LCA_SP(i,4)/10^6; %hydrogen
 
-    WellToTank_GHG_SD(1,i)=FossilFuel_FC(1,i)*WellToTank_Inputdata_LCA_SD(i,1)/10^6;
-    WellToTank_GHG_SD(2,i)=Biofuel_FC(1,i)*WellToTank_Inputdata_LCA_SD(i,2)/10^6;
+    WellToTank_GHG_SD(1,i)=FossilFuel_FC(1,i)*WellToTank_Inputdata_LCA_SD(i,1)/10^6; %diesel
+    WellToTank_GHG_SD(2,i)=Biofuel_FC(1,i)*WellToTank_Inputdata_LCA_SD(i,2)/10^6; %biofuels
     WellToTank_GHG_SD(3,i)=EnergyConsumptionTotal(2,i)*WellToTank_Inputdata_LCA_SD(i,3)/10^6; %electricity
     WellToTank_GHG_SD(4,i)=EnergyConsumptionTotal(3,i)*WellToTank_Inputdata_LCA_SD(i,4)/10^6; %hydrogen
 end
 
 
 %% Part 4: Plot and save results
+
+
+%subset results for plots, only every X years
+yearDensity =5;
+indexYearsFleet = (mod(FleetPeriod,yearDensity)== 0).*FleetPeriod>=StartYearEmissions;
+indexYearsEmissions =mod(EmissionPeriod,yearDensity)== 0;
 fuelCycle_GHG_SP = sum(WellToTank_GHG_SP,1);
 fuelCycle_GHG_SD = sum(WellToTank_GHG_SD,1);
 
@@ -665,23 +574,93 @@ vehicle_GHG_SD_FC = sum(GHG_production_FC_SD,1) + sum(GHG_maintenance_FC_SD,1) +
 vehicle_GHG_SP =  vehicle_GHG_SP_ICE + vehicle_GHG_SP_BEV+ vehicle_GHG_SP_FC;
 vehicle_GHG_SD =  vehicle_GHG_SD_ICE + vehicle_GHG_SD_BEV+ vehicle_GHG_SD_FC;
 
-total_GHG_SP = Tailpipe_GHG + fuelCycle_GHG_SP + vehicle_GHG_SP;
-total_GHG_SD = Tailpipe_GHG +  fuelCycle_GHG_SD + vehicle_GHG_SD;   
-
 total_GHG_SP_ICE = Tailpipe_GHG + sum(WellToTank_GHG_SP(1:2,:),1) + vehicle_GHG_SP_ICE;
 total_GHG_SD_ICE = Tailpipe_GHG + sum(WellToTank_GHG_SD(1:2,:),1) + vehicle_GHG_SD_ICE;
 total_GHG_SP_BEV = sum(WellToTank_GHG_SP(3,:),1) + vehicle_GHG_SP_BEV;
 total_GHG_SD_BEV = sum(WellToTank_GHG_SD(3,:),1) + vehicle_GHG_SD_BEV;
 total_GHG_SP_FC = sum(WellToTank_GHG_SP(4,:),1) + vehicle_GHG_SP_FC;
 total_GHG_SD_FC = sum(WellToTank_GHG_SD(4,:),1) + vehicle_GHG_SD_FC;
+total_GHG_SP = Tailpipe_GHG + fuelCycle_GHG_SP + vehicle_GHG_SP;
+total_GHG_SD = Tailpipe_GHG +  fuelCycle_GHG_SD + vehicle_GHG_SD;
 
-saveName = "Tech-"+techScenario+",Traffic-"+trafficScenario+",Fuel-"+fuelScenario+".mat";
-save(saveName, "EmissionPeriod", "FleetPeriod", "StartYearEmissions", "EndYearEmissions", "StartYearFleet", "EndYearFleet",...
-    "Biofuel_FC", "FossilFuel_FC", "EnergyConsumptionTotal", "Fuel_shares",...
-     "BEVshareZEVs","nBEV","nFC", "nZEV", "nICE", "newBEV", "newFC", "newZEV", "newICE", "totalFleetSize",...
-     "stockBEV","stockFC","stockICE",...
-     "fuelCycle_GHG_SP", "fuelCycle_GHG_SD", "Tailpipe_GHG", "total_GHG_SP", "total_GHG_SD", "vehicle_GHG_SP","vehicle_GHG_SD")
+
+% Save .mat file with variables
+if writeResults==1
+    folderPath = "C:\Users\cecilia0899\OneDrive - Chalmers\Cecilia PhD files\Paper 2 - EV trucks\Code\Results";
+
+    saveName = strcat(folderPath,"\","Tech-"+techScenario+",Traffic-"+trafficScenario+",Fuel-"+fuelScenario+".mat");
+    save(saveName, "EmissionPeriod", "FleetPeriod", "StartYearEmissions", "EndYearEmissions", "StartYearFleet", "EndYearFleet", "indexYearsFleet", "indexYearsEmissions",...
+        "Biofuel_FC", "FossilFuel_FC", "EnergyConsumptionTotal", "Fuel_shares",...
+        "BEVshareZEVs","nBEV","nFC", "nZEV", "nICE", "newBEV", "newFC", "newZEV", "newICE", "totalFleetSize",...
+        "stockBEV","stockFC","stockICE",...
+        "trafficICE_transport",...
+        "fuelCycle_GHG_SP", "fuelCycle_GHG_SD", "Tailpipe_GHG", "total_GHG_SP", "total_GHG_SD", "vehicle_GHG_SP","vehicle_GHG_SD")
+
+
+    %save xls-files with tables
+    folderPath = "C:\Users\cecilia0899\OneDrive - Chalmers\Cecilia PhD files\Paper 2 - EV trucks\Code\Results";
+
+    if techScenario=="Main" && trafficScenario=="Main" && fuelScenario=="Main"
+        header=electrificationData(1,1:5);
+        tableYears = cell2mat(electrificationData(2:end,1));
+        indexTableYears = find(tableYears==2025 | tableYears==2030 | tableYears==2035 | tableYears==2040);
+        tableYears = string(tableYears(indexTableYears));
+        table = 1-BEVshareZEVs(indexTableYears,1:4);
+        table = [tableYears,table];
+        table = [header; table];
+        writematrix(table, fullfile(folderPath,"table6.xls"));
+
+
+        temp =["";TransportTruckGroupDescription(1:4)];
+        table = [string(FleetTruckGroupDescription(1:4)');
+            transformationTable(1:4,1:4)];
+        table = [temp, table];
+        writematrix(table, fullfile(folderPath,"tableSM4.xls"));
+
+        header=electrificationData(1,1:5);
+        tableYears = cell2mat(electrificationData(2:end,1));
+        indexTableYears = find(tableYears==2023 | tableYears==2025 | tableYears==2030 | tableYears==2035 | tableYears==2040);
+        tableYears = string(tableYears(indexTableYears));
+        table = ZEVRates(indexTableYears,1:4);
+        table = [tableYears,table];
+        table = [header; table];
+        writematrix(table, fullfile(folderPath,"tableSM6.xls"));
+    end
+
+    if techScenario=="Main" && fuelScenario=="Main"
+        header=[FleetPeriod(indexYearsFleet)];
+        tableYears = cell2mat(electrificationData(2:end,1));
+        table = [plotNew(indexYearsFleet); nICE(indexYearsFleet) + nZEV(indexYearsFleet)];
+        table = [header; table];
+        tableName = strcat("tableSM9-",trafficScenario,".xls");
+        writematrix(table, fullfile(folderPath,tableName));
+    end
+end
 
 run("PlotResults.m")
 
+%save figures
+if writeResults==1
 
+    if techScenario=="Main" && trafficScenario=="Main" && fuelScenario=="Main"
+        folderPath = "C:\Users\cecilia0899\OneDrive - Chalmers\Cecilia PhD files\Paper 2 - EV trucks\Figures";
+        %saveas(figureSM2,fullfile(folderPath,"FigureSM2"),"tiff")
+        saveas(figureSM3,fullfile(folderPath,"FigureSM3"),"tiff")
+        saveas(figureSM4,fullfile(folderPath,"FigureSM4"),"tiff")
+        saveas(figure5,fullfile(folderPath,"Figure5"),"tiff")
+        saveas(figure6,fullfile(folderPath,"Figure6"),"tiff")
+        saveas(figure7,fullfile(folderPath,"Figure7"),"tiff")
+        saveas(figure8,fullfile(folderPath,"Figure8"),"tiff")
+    end
+
+    %save xls-file with data used in paper
+    folderPath = "C:\Users\cecilia0899\OneDrive - Chalmers\Cecilia PhD files\Paper 2 - EV trucks\Code\Results";
+    table = ["Cum. CO2 total, SP ",EndYearEmissions, sum(cumEmissionsSP(:,end),1)/10^6,"Mton. ", "","";
+        "Cum. CO2 total, SD ",EndYearEmissions, sum(cumEmissionsSD(:,end),1)/10^6,"Mton. ","","";
+        "Cum. CO2 total, SP vs SD ",EndYearEmissions, ...
+        (sum(cumEmissionsSP(:,end),1)-sum(cumEmissionsSD(:,end),1))/10^6,"Mton. ",(sum(cumEmissionsSP(:,end),1)-sum(cumEmissionsSD(:,end),1))/sum(cumEmissionsSP(:,end),1)*100,"%";
+        "Cum. CO2 fuels, SP vs SD ",EndYearEmissions,(cumFuelSP(end)-cumFuelSD(end))/10^6,"Mton. ",(cumFuelSP(end)-cumFuelSD(end))/cumFuelSP(end)*100,"%";
+        "Cum. CO2 vehicle, SP vs SD ",EndYearEmissions,(cumVehicleSP(end)-cumVehicleSD(end))/10^6,"Mton. ",(cumVehicleSP(end)-cumVehicleSD(end))/cumVehicleSP(end)*100,"%"];
+    tableName = strcat("numbersToReport-","Tech-"+techScenario+",Traffic-"+trafficScenario+",Fuel-"+fuelScenario,".xls");
+    writematrix(table, fullfile(folderPath,tableName));
+end
