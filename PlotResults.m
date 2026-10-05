@@ -1,6 +1,6 @@
 %% Fleet composition
 
-figure5 = figure("Name","Figure 5: Fleet and traffic composition",'NumberTitle', 'off');
+figFleetAndTraffic = figure("Name","Figure: Fleet and traffic composition",'NumberTitle', 'off');
 tiledlayout(3,1)
 
 nexttile(1)
@@ -48,11 +48,11 @@ lgd = legend('ICE','BET','FCET', 'Total');
 lgd.Location = "southwest";
 %lgd.Direction = "reverse"; Matlab 2023b
 
-figure5.Position =[50 250 750 800];
+figFleetAndTraffic.Position =[50 250 750 800];
 
 
 %% CO2 emissions bar chart, with cumulative emission lines
-figure6 = figure("Name","Figure 6: GHG emissions - annual and cumulative",'NumberTitle', 'off');
+figGHGemissionsMain = figure("Name","Figure 6: GHG emissions - annual and cumulative",'NumberTitle', 'off');
 tiledlayout(1,2)
 
 barEmissionsSP = [Tailpipe_GHG(1:5:end);  fuelCycle_GHG_SP(1:5:end); vehicle_GHG_SP(1:5:end)];
@@ -125,12 +125,12 @@ lgd=legend("Tailpipe","Fuel cycle","Vehicle cycle", "Cum. tailpipe", "Cum total"
 lgd.Layout.Tile = "south";
 lgd.Orientation ="horizontal";
 
-figure6.Position = [50 100 1100 600];
+figGHGemissionsMain.Position = [50 100 1100 600];
 
 
 %% energy demand in TWh (1 chart only)
 
-figure7 = figure("Name","Figure 7: Energy use (main barhcart)",'NumberTitle', 'off');
+figEnergyUseMain = figure("Name","Figure: Energy use (main barhcart)",'NumberTitle', 'off');
 title("Energy use per technology")
 hold on
 mainEnergyBar = bar(EmissionPeriod(indexYearsEmissions), [FossilFuel_FC(indexYearsEmissions)', Biofuel_FC(indexYearsEmissions)', EnergyConsumptionTotal(2,indexYearsEmissions)', EnergyConsumptionTotal(3,indexYearsEmissions)']/10^9,'stacked');
@@ -147,11 +147,11 @@ lgd.Location = "southoutside";
 lgd.Orientation ="horizontal";
 %lgd.Direction = "reverse"; Matlab 2023b
 
-figure7.Position =[50 450 800 500];
+figEnergyUseMain.Position =[50 450 800 500];
 
 
 %% CO2 emissions per technology bar chart
-figure8 = figure("Name","Figure 8: GHG emissions per technology bar chart",'NumberTitle', 'off');
+figGHGemissionsPerTechnologyMain = figure("Name","Figure 8: GHG emissions per technology bar chart",'NumberTitle', 'off');
 tiledlayout(3,2)
 
 plotResultYears=EmissionPeriod(1:5:end);
@@ -250,4 +250,4 @@ lgd = legend ("Tailpipe","Fuel cycle","Vehicle cycle");
 lgd.Layout.Tile = "south";
 lgd.Orientation ="horizontal";
 
-figure8.Position =[50 100 850 700];
+figGHGemissionsPerTechnologyMain.Position =[50 100 850 700];

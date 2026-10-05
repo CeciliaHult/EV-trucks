@@ -5,7 +5,7 @@ close all;
 %% Part 0: Set scope and variables
 
 plotScope = 0; % 1 if all graphs are to be plotted and 0 if only selected result graphs
-writeResults = 0; %1 is results should be saved to .mat files, tables and figures
+writeResults = 1; %1 is results should be saved to .mat files, tables and figures
 
 currentYear=2023; %year for plotting data etc. Available: 2001-2023
 VehicleAgeSpan=30;% number of model years to include in model.
@@ -17,7 +17,7 @@ ForecastMethod = 2; % 1= Constant fleet growth rate derived from data, 2= new ve
 StartYearEmissions = 2020; %must be more than 2019, no data for vehicle cycle pre-2019
 EndYearEmissions =2060;
 
-techScenario ="Main"; % Main = BEV&FC, noZEV= only ICE, noFC = only BEVs as ZEVs
+techScenario ="noFC"; % Main = BEV&FC, noZEV= only ICE, noFC = only BEVs as ZEVs
 fuelScenario = "Main"; %Main = 100% renewable in 2050, Stated = Swedish stated policy, SwedishClimate = 100% renewable in 2045
 trafficScenario = "Main"; % Main = Transport Administration base case, Low = lower traffic demand scenario
 
@@ -93,11 +93,11 @@ FleetGroupsTraffic = [sum(FleetWeightClassesTraffic(2:6)); %3.5-20t
 nGroupsFleet = length(FleetGroupsTraffic);
 FleetTruckGroupDescription = {'3.5-20t'; '20-30t';'>30t'; 'Swedish tractors';'Foreign trucks'};
 
-%initialise powertrain composition
-FleetPowertrains=readcell('FleetPowertrains.xlsx','Sheet','Matlab','Range','A1:C5');
-FleetPowertrainsN(:,1) = cell2mat(FleetPowertrains(2:5,2));
-FleetPowertrainsNShares(:,1) = cell2mat(FleetPowertrains(2:5,3));
-nFleetPowertrains = length(FleetPowertrainsNShares);
+% %initialise powertrain composition
+% FleetPowertrains=readcell('FleetPowertrains.xlsx','Sheet','Matlab','Range','A1:C5');
+% FleetPowertrainsN(:,1) = cell2mat(FleetPowertrains(2:5,2));
+% FleetPowertrainsNShares(:,1) = cell2mat(FleetPowertrains(2:5,3));
+% nFleetPowertrains = length(FleetPowertrainsNShares);
 
 
 %% PART 2: Forecast initialisation
@@ -647,10 +647,10 @@ if writeResults==1
         %saveas(figureSM2,fullfile(folderPath,"FigureSM2"),"tiff")
         saveas(figureSM3,fullfile(folderPath,"FigureSM3"),"tiff")
         saveas(figureSM4,fullfile(folderPath,"FigureSM4"),"tiff")
-        saveas(figure5,fullfile(folderPath,"Figure5"),"tiff")
-        saveas(figure6,fullfile(folderPath,"Figure6"),"tiff")
-        saveas(figure7,fullfile(folderPath,"Figure7"),"tiff")
-        saveas(figure8,fullfile(folderPath,"Figure8"),"tiff")
+        saveas(figFleetAndTraffic,fullfile(folderPath,"Figure2"),"tiff")
+        saveas(figGHGemissionsMain,fullfile(folderPath,"Figure3"),"tiff")
+        saveas(figEnergyUseMain,fullfile(folderPath,"Figure4"),"tiff")
+        saveas(figGHGemissionsPerTechnologyMain,fullfile(folderPath,"Figure5"),"tiff")
     end
 
     %save xls-file with data used in paper
